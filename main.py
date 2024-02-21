@@ -464,17 +464,21 @@ def main():
                     loss = criterion(outputs, labels)
                     meta_train_loss+=loss
                     theta={name:param for name, param in model.named_parameters()}
-                    print("before",theta["module.classifier.classifier.0.weight"])
+                    # print("before",theta["module.classifier.classifier.0.weight"])
                     gradients=torch.autograd.grad(meta_train_loss,theta.values(),create_graph=True, allow_unused=True)
-                    print("gradients",gradients[0])
+                    # print("gradients",gradients[0])
                     for i, name in enumerate(theta):
                         if gradients[i] is not None:
                             # print(theta[name])
                             # print(name)
                             theta[name] = theta[name] - lr_inner * gradients[i] * theta[name]
                             # print(theta)
-                        if name =="module.classifier.classifier.0.weight":
-                            print("after",theta["module.classifier.classifier.0.weight"])
+                        # if name =="module.classifier.classifier.0.weight":
+                        #     print("after",theta["module.classifier.classifier.0.weight"])
+                    if (cur_itrs) % 10 == 0:
+                            interval_loss = interval_loss / 10
+                            print("Epoch %d, Itrs %d/%d, Loss=%f" %
+                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
             #update gradients of model after meta-train
             
             #meta-test
@@ -513,14 +517,6 @@ def main():
             del total_loss
         
             torch.cuda.empty_cache()
-
-
-                
-                
-
-
-
-            
             if (cur_itrs) % opts.val_interval == 0:
                 save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
                         (opts.model, opts.dataset, opts.output_stride))
