@@ -535,7 +535,7 @@ def main():
                         print("validation...")
                         # model.eval()
                         val_score, ret_samples = validate(
-                            opts=opts, model=model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
+                            opts=opts, model=fixed_model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
                             ret_samples_ids=vis_sample_id)
                         print(metrics.to_str(val_score))
                         if val_score['Mean IoU'] > best_score:  # save best model
@@ -556,7 +556,7 @@ def main():
                                 lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
                                 concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
                                 vis.vis_image('Sample %d' % k, concat_img)
-                        model.train()
+                        fixed_model.train()
                     scheduler.step()
 
             if cur_itrs >= opts.total_itrs:
