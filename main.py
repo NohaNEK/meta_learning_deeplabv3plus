@@ -48,6 +48,7 @@ def get_argparser():
     parser.add_argument("--separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
     parser.add_argument("--output_stride", type=int, default=16, choices=[8, 16])
+    parser.add_argument("--nb_episodes",type=int,default=10,help="you should give number ")
 
     # Train Options
     parser.add_argument("--test_only", action='store_true', default=False)
@@ -223,15 +224,15 @@ def validate(opts, model, loader, device, metrics,denorm=None,writer=None, cur_i
         denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406],
                                    std=[0.229, 0.224, 0.225])
         img_id = 0
-    f_cs=[]
+
     with torch.no_grad():
         for i, (images, labels) in tqdm(enumerate(loader)):
 
             images = images.to(device, dtype=torch.float32)
             labels = labels.to(device, dtype=torch.long)
 
-            outputs,feat = model(images)
-            f_cs.append(feat['low_level'])
+            outputs = model(images)
+           
             preds = outputs.detach().max(dim=1)[1].cpu().numpy()
             targets = labels.cpu().numpy()
 
@@ -266,7 +267,7 @@ def validate(opts, model, loader, device, metrics,denorm=None,writer=None, cur_i
                     plt.savefig('results/%d_overlay.png' % img_id, bbox_inches='tight', pad_inches=0)
                     plt.close()
                     img_id += 1
-        torch.save(f_cs,"cs_feat.pt")
+    
         score = metrics.get_results()
         
     return score, ret_samples
@@ -338,10 +339,7 @@ def main():
         opts.val_batch_size = 1
 
     train_dst, val_dst = get_dataset(opts)
-    # coco_loader = DataLoader(coco_ds,batch_size=6,shuffle=True,num_workers=2)
-    # train_loader = data.DataLoader(
-    #     train_dst, batch_size=opts.batch_size, shuffle=True, num_workers=2,
-    #     drop_last=True)  # drop_last=True to ignore single-image batches.
+
 
 
     #split ds into 10 domains
@@ -353,6 +351,7 @@ def main():
 
     # Set up model (all models are 'constructed at network.modeling)
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
+    fixed_model= model
     if opts.separable_conv and 'plus' in opts.model:
         network.convert_to_separable_conv(model.classifier)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
@@ -363,11 +362,11 @@ def main():
     # Set up optimizer
     optimizer = torch.optim.SGD(params=[
         {'params': model.backbone.parameters(), 'lr': 0.1 * opts.lr},
-        # {'params': model.classifier.parameters(), 'lr': opts.lr},
-    ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
-    optimizer_2 = torch.optim.SGD(params=[
         {'params': model.classifier.parameters(), 'lr': opts.lr},
     ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
+    # optimizer_2 = torch.optim.SGD(params=[
+    #     {'params': model.classifier.parameters(), 'lr': opts.lr},
+    # ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
     # optimizer = torch.optim.SGD(params=model.parameters(), lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
     # torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.lr_decay_step, gamma=opts.lr_decay_factor)
     if opts.lr_policy == 'poly':
@@ -439,140 +438,115 @@ def main():
     factor=10
     lr_inner = 0.01
     lr_outer =1
+    
     while True:  # cur_itrs < opts.total_itrs:
         # =====  Train  =====
         model.train()
         cur_epochs += 1
-        meta_train_loss=0.0
-        meta_val_loss=0.0
-        id_val=np.random.choice(a=np.arange(0, factor), size=2)
-        print("meta-test domains ids : ",id_val)
-        optimizer_2.zero_grad()
-        for i in range(factor):
-            if i in id_val :
-                continue
-            else: 
 
-                for (images, labels,coco_img) in train_loaders[i]:
-                    # print(cur_itrs)
-                    cur_itrs += 1
-                    u,s,v = torch.linalg.svd(images)
-                    s2= torch.linalg.svdvals(coco_img) 
-                    #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
-            
-
-                    rec_imgs = u @ torch.diag_embed(s2) @ v
-                    rec_imgs=rec_imgs.to(device,dtype=torch.float32)
-                    labels = labels.to(device, dtype=torch.long)
-                    
-                
-                    optimizer.zero_grad()
-                    outputs  = model(rec_imgs)
-                    loss = criterion(outputs, labels)
-                    meta_train_loss+=loss
-                    loss.backward()
-                    optimizer.step()
-                    np_loss = loss.detach().cpu().numpy()
-                    interval_loss += np_loss
-                    
-
-                    # optimizer.zero_grad()
-                    
-           
-                    if (cur_itrs) % 10 == 0:
-                            interval_loss = interval_loss / 10
-                            print("In meta-train : Epoch %d, Itrs %d/%d, Loss=%f" %
-                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
-            # #update gradients of model after meta-train
-            meta_train_loss.backward()
-            optimizer_2.step()
-            l_t=meta_train_loss.detach().cpu().numpy()
-            print("meta-train loss : Epoch %d, Itrs %d/%d, Loss=%f" %
-                                (cur_epochs, cur_itrs, opts.total_itrs, l_t))
-          
- 
-            #meta-test
-            for i in id_val:
-                
-                for (images,labels,coco_img) in train_loaders[i]:
-                    cur_itrs += 1
-                    u,s,v = torch.linalg.svd(images)
-                    s2= torch.linalg.svdvals(coco_img) 
-                    #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
-            
-
-                    rec_imgs = u @ torch.diag_embed(s2) @ v
-                    rec_imgs=rec_imgs.to(device,dtype=torch.float32)
-                    labels = labels.to(device, dtype=torch.long)
-                    
-                
-                    # optimizer.zero_grad()
-                    optimizer.zero_grad()
-                    outputs = model(rec_imgs)
-                    loss = criterion(outputs, labels)
-                    meta_val_loss+=loss
-                    loss.backward()
-                    optimizer.step()
-                    np_loss = loss.detach().cpu().numpy()
-                    interval_loss_test += np_loss
-
-                    if (cur_itrs) % 10 == 0:
-                            interval_loss = interval_loss / 10
-                            print("In meta-test : Epoch %d, Itrs %d/%d, Loss=%f" %
-                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
-
-
-                    # theta={name:param for name, param in model.named_parameters()}
-                    # print(theta)
-                    # gradients=torch.autograd.grad(meta_val_loss,theta.values(),create_graph=True, allow_unused=True)
-                    # print(gradients[0])
-                    # for i, name in enumerate(theta):
-                    #     if gradients[i] is not None:
-                    #         print(theta[name])
-                    #         print(name)
-                    #         theta[name] = theta[name] - lr_outer * gradients[i] * theta[name]
-                    #         print(theta)
-            
-
-            l_t=meta_val_loss.detach().cpu().numpy()
-            print("meta-test loss : Epoch %d, Itrs %d/%d, Loss=%f" %
-                                (cur_epochs, cur_itrs, opts.total_itrs, l_t))
-            total_loss = meta_train_loss + meta_val_loss
-            optimizer_2.zero_grad()
-            total_loss.backward()
-            optimizer_2.step()
-            del total_loss
         
-            torch.cuda.empty_cache()
-            if (cur_itrs) % opts.val_interval == 0:
-                save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
-                        (opts.model, opts.dataset, opts.output_stride))
-                print("validation...")
-                # model.eval()
-                val_score, ret_samples = validate(
-                    opts=opts, model=model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
-                    ret_samples_ids=vis_sample_id)
-                print(metrics.to_str(val_score))
-                if val_score['Mean IoU'] > best_score:  # save best model
-                    best_score = val_score['Mean IoU']
-                    save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
-                            (opts.model, opts.dataset, opts.output_stride))
-                writer.add_scalar('mIoU_cs', val_score['Mean IoU'], cur_itrs)
-                writer.add_scalar('overall_acc_cs',val_score['Overall Acc'],cur_itrs)
+       
+        for i in range(opts.nb_episodes):
+            id_val=np.random.choice(a=np.arange(0, factor), size=2)
+            print("meta-test domains ids : ",id_val)
 
-                if vis is not None:  # visualize validation score and samples
-                    vis.vis_scalar("[Val] Overall Acc", cur_itrs, val_score['Overall Acc'])
-                    vis.vis_scalar("[Val] Mean IoU", cur_itrs, val_score['Mean IoU'])
-                    vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
+            for i in range(factor):
+                    if i in id_val :
+                        continue
+                    else: 
 
-                    for k, (img, target, lbl) in enumerate(ret_samples):
-                        img = (denorm(img) * 255).astype(np.uint8)
-                        target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
-                        lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
-                        concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
-                        vis.vis_image('Sample %d' % k, concat_img)
-                model.train()
-            scheduler.step()
+                        for (images, labels,coco_img) in train_loaders[i]:
+                            # print(cur_itrs)
+                            cur_itrs += 1
+                            u,s,v = torch.linalg.svd(images)
+                            s2= torch.linalg.svdvals(coco_img) 
+                            #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
+                    
+
+                            rec_imgs = u @ torch.diag_embed(s2) @ v
+                            rec_imgs=rec_imgs.to(device,dtype=torch.float32)
+                            labels = labels.to(device, dtype=torch.long)
+                            
+                        
+                            optimizer.zero_grad()
+                            outputs  = fixed_model(rec_imgs)
+                            loss = criterion(outputs, labels)
+                            loss.backward()
+                            optimizer.step()
+                            np_loss = loss.detach().cpu().numpy()
+                            interval_loss += np_loss
+   
+                            if (cur_itrs) % 10 == 0:
+                                    interval_loss = interval_loss / 10
+                                    print("In meta-train : Epoch %d, Itrs %d/%d, Loss=%f" %
+                                        (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+
+
+                
+                    # Copy parameters from clone_model to fixed_model after meta-train
+                    for param1, param2 in zip(model.parameters(), fixed_model.parameters()):
+                        param2.data.copy_(param1.data.clone())
+                    #meta-test
+                    for i in id_val:
+                        
+                        for (images,labels,coco_img) in train_loaders[i]:
+                            cur_itrs += 1
+                            u,s,v = torch.linalg.svd(images)
+                            s2= torch.linalg.svdvals(coco_img) 
+                            #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
+                    
+
+                            rec_imgs = u @ torch.diag_embed(s2) @ v
+                            rec_imgs=rec_imgs.to(device,dtype=torch.float32)
+                            labels = labels.to(device, dtype=torch.long)
+                            
+                            optimizer.zero_grad()
+                            outputs = fixed_model(rec_imgs)
+                            loss = criterion(outputs, labels)
+                            loss.backward()
+                            optimizer.step()
+                            np_loss = loss.detach().cpu().numpy()
+                            interval_loss_test += np_loss
+
+                            if (cur_itrs) % 10 == 0:
+                                    interval_loss = interval_loss / 10
+                                    print("In meta-test : Epoch %d, Itrs %d/%d, Loss=%f" %
+                                        (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+
+
+                    # Copy parameters from clone_model to fixed_model after meta-test
+                    for param1, param2 in zip(model.parameters(), fixed_model.parameters()):
+                        param2.data.copy_(param1.data.clone())
+                
+                    if (cur_itrs) % opts.val_interval == 0:
+                        save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
+                                (opts.model, opts.dataset, opts.output_stride))
+                        print("validation...")
+                        # model.eval()
+                        val_score, ret_samples = validate(
+                            opts=opts, model=model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
+                            ret_samples_ids=vis_sample_id)
+                        print(metrics.to_str(val_score))
+                        if val_score['Mean IoU'] > best_score:  # save best model
+                            best_score = val_score['Mean IoU']
+                            save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
+                                    (opts.model, opts.dataset, opts.output_stride))
+                        writer.add_scalar('mIoU_cs', val_score['Mean IoU'], cur_itrs)
+                        writer.add_scalar('overall_acc_cs',val_score['Overall Acc'],cur_itrs)
+
+                        if vis is not None:  # visualize validation score and samples
+                            vis.vis_scalar("[Val] Overall Acc", cur_itrs, val_score['Overall Acc'])
+                            vis.vis_scalar("[Val] Mean IoU", cur_itrs, val_score['Mean IoU'])
+                            vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
+
+                            for k, (img, target, lbl) in enumerate(ret_samples):
+                                img = (denorm(img) * 255).astype(np.uint8)
+                                target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
+                                lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
+                                concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
+                                vis.vis_image('Sample %d' % k, concat_img)
+                        model.train()
+                    scheduler.step()
 
             if cur_itrs >= opts.total_itrs:
                 return
