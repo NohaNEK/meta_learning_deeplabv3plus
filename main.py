@@ -62,7 +62,7 @@ def get_argparser():
     parser.add_argument("--step_size", type=int, default=10000)
     parser.add_argument("--crop_val", action='store_true', default=False,
                         help='crop validation (default: False)')
-    parser.add_argument("--batch_size", type=int, default=6,
+    parser.add_argument("--batch_size", type=int, default=2,
                         help='batch size (default: 16)')
     parser.add_argument("--val_batch_size", type=int, default=6,
                         help='batch size for validation (default: 4)')
@@ -363,6 +363,9 @@ def main():
     # Set up optimizer
     optimizer = torch.optim.SGD(params=[
         {'params': model.backbone.parameters(), 'lr': 0.1 * opts.lr},
+        # {'params': model.classifier.parameters(), 'lr': opts.lr},
+    ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
+    optimizer_2 = torch.optim.SGD(params=[
         {'params': model.classifier.parameters(), 'lr': opts.lr},
     ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
     # optimizer = torch.optim.SGD(params=model.parameters(), lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
@@ -432,6 +435,7 @@ def main():
         return
 
     interval_loss = 0
+    interval_loss_test=0
     factor=10
     lr_inner = 0.01
     lr_outer =1
@@ -442,12 +446,55 @@ def main():
         meta_train_loss=0.0
         meta_val_loss=0.0
         id_val=np.random.choice(a=np.arange(0, factor), size=2)
+        print("meta-test domains ids : ",id_val)
+        optimizer_2.zero_grad()
         for i in range(factor):
             if i in id_val :
                 continue
             else: 
 
                 for (images, labels,coco_img) in train_loaders[i]:
+                    # print(cur_itrs)
+                    cur_itrs += 1
+                    u,s,v = torch.linalg.svd(images)
+                    s2= torch.linalg.svdvals(coco_img) 
+                    #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
+            
+
+                    rec_imgs = u @ torch.diag_embed(s2) @ v
+                    rec_imgs=rec_imgs.to(device,dtype=torch.float32)
+                    labels = labels.to(device, dtype=torch.long)
+                    
+                
+                    optimizer.zero_grad()
+                    outputs  = model(rec_imgs)
+                    loss = criterion(outputs, labels)
+                    meta_train_loss+=loss
+                    loss.backward()
+                    optimizer.step()
+                    np_loss = loss.detach().cpu().numpy()
+                    interval_loss += np_loss
+                    
+
+                    # optimizer.zero_grad()
+                    
+           
+                    if (cur_itrs) % 10 == 0:
+                            interval_loss = interval_loss / 10
+                            print("In meta-train : Epoch %d, Itrs %d/%d, Loss=%f" %
+                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+            # #update gradients of model after meta-train
+            meta_train_loss.backward()
+            optimizer_2.step()
+            l_t=meta_train_loss.detach().cpu().numpy()
+            print("meta-train loss : Epoch %d, Itrs %d/%d, Loss=%f" %
+                                (cur_epochs, cur_itrs, opts.total_itrs, l_t))
+          
+ 
+            #meta-test
+            for i in id_val:
+                
+                for (images,labels,coco_img) in train_loaders[i]:
                     cur_itrs += 1
                     u,s,v = torch.linalg.svd(images)
                     s2= torch.linalg.svdvals(coco_img) 
@@ -460,60 +507,40 @@ def main():
                     
                 
                     # optimizer.zero_grad()
-                    outputs,feat_image = model(rec_imgs)
-                    loss = criterion(outputs, labels)
-                    meta_train_loss+=loss
-                    theta={name:param for name, param in model.named_parameters()}
-                    # print("before",theta["module.classifier.classifier.0.weight"])
-                    gradients=torch.autograd.grad(meta_train_loss,theta.values(),create_graph=True, allow_unused=True)
-                    # print("gradients",gradients[0])
-                    for i, name in enumerate(theta):
-                        if gradients[i] is not None:
-                            # print(theta[name])
-                            # print(name)
-                            theta[name] = theta[name] - lr_inner * gradients[i] * theta[name]
-                            # print(theta)
-                        # if name =="module.classifier.classifier.0.weight":
-                        #     print("after",theta["module.classifier.classifier.0.weight"])
-                    if (cur_itrs) % 10 == 0:
-                            interval_loss = interval_loss / 10
-                            print("Epoch %d, Itrs %d/%d, Loss=%f" %
-                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
-            #update gradients of model after meta-train
-            
-            #meta-test
-            for i in id_val:
-                
-                for (images,labels,coco_img) in train_loaders[i]:
-                    u,s,v = torch.linalg.svd(images)
-                    s2= torch.linalg.svdvals(coco_img) 
-                    #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
-            
-
-                    rec_imgs = u @ torch.diag_embed(s2) @ v
-                    rec_imgs=rec_imgs.to(device,dtype=torch.float32)
-                    labels = labels.to(device, dtype=torch.long)
-                    
-                
-                    # optimizer.zero_grad()
-                    outputs,feat_image = model(rec_imgs)
+                    optimizer.zero_grad()
+                    outputs = model(rec_imgs)
                     loss = criterion(outputs, labels)
                     meta_val_loss+=loss
-                    theta={name:param for name, param in model.named_parameters()}
-                    print(theta)
-                    gradients=torch.autograd.grad(meta_val_loss,theta.values(),create_graph=True, allow_unused=True)
-                    print(gradients[0])
-                    for i, name in enumerate(theta):
-                        if gradients[i] is not None:
-                            print(theta[name])
-                            print(name)
-                            theta[name] = theta[name] - lr_outer * gradients[i] * theta[name]
-                            print(theta)
+                    loss.backward()
+                    optimizer.step()
+                    np_loss = loss.detach().cpu().numpy()
+                    interval_loss_test += np_loss
+
+                    if (cur_itrs) % 10 == 0:
+                            interval_loss = interval_loss / 10
+                            print("In meta-test : Epoch %d, Itrs %d/%d, Loss=%f" %
+                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+
+
+                    # theta={name:param for name, param in model.named_parameters()}
+                    # print(theta)
+                    # gradients=torch.autograd.grad(meta_val_loss,theta.values(),create_graph=True, allow_unused=True)
+                    # print(gradients[0])
+                    # for i, name in enumerate(theta):
+                    #     if gradients[i] is not None:
+                    #         print(theta[name])
+                    #         print(name)
+                    #         theta[name] = theta[name] - lr_outer * gradients[i] * theta[name]
+                    #         print(theta)
             
+
+            l_t=meta_val_loss.detach().cpu().numpy()
+            print("meta-test loss : Epoch %d, Itrs %d/%d, Loss=%f" %
+                                (cur_epochs, cur_itrs, opts.total_itrs, l_t))
             total_loss = meta_train_loss + meta_val_loss
-            optimizer.zero_grad()
+            optimizer_2.zero_grad()
             total_loss.backward()
-            optimizer.step()
+            optimizer_2.step()
             del total_loss
         
             torch.cuda.empty_cache()

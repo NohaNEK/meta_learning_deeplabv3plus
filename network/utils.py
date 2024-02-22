@@ -12,10 +12,10 @@ class _SimpleSegmentationModel(nn.Module):
         
     def forward(self, x):
         input_shape = x.shape[-2:]
-        features = self.backbone(x)
-        x = self.classifier(features)
+        #features = self.backbone(x)
+        x = self.classifier(self.backbone(x))
         x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
-        return x,features
+        return x
 
 
 class IntermediateLayerGetter(nn.ModuleDict):
