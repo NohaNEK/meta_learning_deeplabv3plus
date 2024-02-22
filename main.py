@@ -351,10 +351,12 @@ def main():
 
     # Set up model (all models are 'constructed at network.modeling)
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
-    fixed_model= model
+    
     if opts.separable_conv and 'plus' in opts.model:
         network.convert_to_separable_conv(model.classifier)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
+
+    fixed_model= model
 
     # Set up metrics
     metrics = StreamSegMetrics(opts.num_classes)
@@ -442,6 +444,7 @@ def main():
     while True:  # cur_itrs < opts.total_itrs:
         # =====  Train  =====
         model.train()
+        fixed_model.train()
         cur_epochs += 1
 
         
@@ -472,6 +475,11 @@ def main():
                             outputs  = fixed_model(rec_imgs)
                             loss = criterion(outputs, labels)
                             loss.backward()
+
+                            for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
+                                param1.grad =param2.grad
+ 
+                            
                             optimizer.step()
                             np_loss = loss.detach().cpu().numpy()
                             interval_loss += np_loss
@@ -484,8 +492,8 @@ def main():
 
                 
                     # Copy parameters from clone_model to fixed_model after meta-train
-                    for param1, param2 in zip(model.parameters(), fixed_model.parameters()):
-                        param2.data.copy_(param1.data.clone())
+                    for  param1,param2 in zip(model.parameters(), fixed_model.parameters()):
+                        param2.grad =param1.grad
                     #meta-test
                     for i in id_val:
                         
@@ -504,6 +512,9 @@ def main():
                             outputs = fixed_model(rec_imgs)
                             loss = criterion(outputs, labels)
                             loss.backward()
+                            for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
+                                param1.grad =param2.grad
+                        
                             optimizer.step()
                             np_loss = loss.detach().cpu().numpy()
                             interval_loss_test += np_loss
@@ -515,8 +526,8 @@ def main():
 
 
                     # Copy parameters from clone_model to fixed_model after meta-test
-                    for param1, param2 in zip(model.parameters(), fixed_model.parameters()):
-                        param2.data.copy_(param1.data.clone())
+                    for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
+                        param2.grad =param1.grad
                 
                     if (cur_itrs) % opts.val_interval == 0:
                         save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
