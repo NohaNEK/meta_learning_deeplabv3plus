@@ -332,7 +332,7 @@ def main():
     torch.manual_seed(opts.random_seed)
     np.random.seed(opts.random_seed)
     random.seed(opts.random_seed)
-    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/R101_svd_rand_s2")#original_baseline
+    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/logs/R101_META_Learning")#original_baseline
 
     # Setup dataloader
     if opts.dataset == 'voc' and not opts.crop_val:
@@ -454,27 +454,27 @@ def main():
             print("meta-test domains ids : ",id_val)
 
             for i in range(factor):
+                    print('train domain id',i)
                     if i in id_val :
                         continue
                     else: 
 
-                        for (images, labels,coco_img) in train_loaders[i]:
+                        for (images, labels,_) in train_loaders[i]:
                             # print(cur_itrs)
                             cur_itrs += 1
-                            u,s,v = torch.linalg.svd(images)
-                            s2= torch.linalg.svdvals(coco_img) 
-                            #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
-                    
 
-                            rec_imgs = u @ torch.diag_embed(s2) @ v
-                            rec_imgs=rec_imgs.to(device,dtype=torch.float32)
+
+                            images=images.to(device,dtype=torch.float32)
                             labels = labels.to(device, dtype=torch.long)
                             
                         
                             optimizer.zero_grad()
-                            outputs  = fixed_model(rec_imgs)
+                            outputs  = fixed_model(images)
                             loss = criterion(outputs, labels)
                             loss.backward()
+
+                            np_loss = loss.detach().cpu().numpy()
+                            interval_loss += np_loss
 
                             for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
                                 param1.grad =param2.grad
@@ -488,76 +488,83 @@ def main():
                                     interval_loss = interval_loss / 10
                                     print("In meta-train : Epoch %d, Itrs %d/%d, Loss=%f" %
                                         (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+                            if (cur_itrs) % 100 == 0: 
+                                interval_loss=interval_loss/100
+                                writer.add_scalar('train_image_loss', interval_loss, cur_itrs)
+                                interval_loss = 0.0
+                                writer.add_scalar('LR_Backbone_train',scheduler.get_lr()[0],cur_itrs)
+                                writer.add_scalar('LR_classifier_train',scheduler.get_lr()[1],cur_itrs)
 
 
                 
                     # Copy parameters from clone_model to fixed_model after meta-train
                     for  param1,param2 in zip(model.parameters(), fixed_model.parameters()):
                         param2.grad =param1.grad
-                    #meta-test
-                    for i in id_val:
-                        
-                        for (images,labels,coco_img) in train_loaders[i]:
-                            cur_itrs += 1
-                            u,s,v = torch.linalg.svd(images)
-                            s2= torch.linalg.svdvals(coco_img) 
-                            #s3 = torch.cat([s[:,:,0].unsqueeze(2),s2[:,:,1:]],dim=2)
+            #meta-test
+            for i in id_val:
+                print('test domain id',i)
+                for (images,labels,_) in train_loaders[i]:
+                    cur_itrs += 1
+   
+                    images=images.to(device,dtype=torch.float32)
+                    labels = labels.to(device, dtype=torch.long)
                     
-
-                            rec_imgs = u @ torch.diag_embed(s2) @ v
-                            rec_imgs=rec_imgs.to(device,dtype=torch.float32)
-                            labels = labels.to(device, dtype=torch.long)
-                            
-                            optimizer.zero_grad()
-                            outputs = fixed_model(rec_imgs)
-                            loss = criterion(outputs, labels)
-                            loss.backward()
-                            for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                                param1.grad =param2.grad
-                        
-                            optimizer.step()
-                            np_loss = loss.detach().cpu().numpy()
-                            interval_loss_test += np_loss
-
-                            if (cur_itrs) % 10 == 0:
-                                    interval_loss = interval_loss / 10
-                                    print("In meta-test : Epoch %d, Itrs %d/%d, Loss=%f" %
-                                        (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
-
-
-                    # Copy parameters from clone_model to fixed_model after meta-test
+                    optimizer.zero_grad()
+                    outputs = fixed_model(images)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
                     for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                        param2.grad =param1.grad
+                        param1.grad =param2.grad
                 
-                    if (cur_itrs) % opts.val_interval == 0:
-                        save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
-                                (opts.model, opts.dataset, opts.output_stride))
-                        print("validation...")
-                        # model.eval()
-                        val_score, ret_samples = validate(
-                            opts=opts, model=fixed_model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
-                            ret_samples_ids=vis_sample_id)
-                        print(metrics.to_str(val_score))
-                        if val_score['Mean IoU'] > best_score:  # save best model
-                            best_score = val_score['Mean IoU']
-                            save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
-                                    (opts.model, opts.dataset, opts.output_stride))
-                        writer.add_scalar('mIoU_cs', val_score['Mean IoU'], cur_itrs)
-                        writer.add_scalar('overall_acc_cs',val_score['Overall Acc'],cur_itrs)
+                    optimizer.step()
+                    np_loss = loss.detach().cpu().numpy()
+                    interval_loss_test += np_loss
 
-                        if vis is not None:  # visualize validation score and samples
-                            vis.vis_scalar("[Val] Overall Acc", cur_itrs, val_score['Overall Acc'])
-                            vis.vis_scalar("[Val] Mean IoU", cur_itrs, val_score['Mean IoU'])
-                            vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
+                    if (cur_itrs) % 10 == 0:
+                            interval_loss = interval_loss / 10
+                            print("In meta-test : Epoch %d, Itrs %d/%d, Loss=%f" %
+                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+                    if (cur_itrs) % 100 == 0: 
+                                interval_loss=interval_loss/100
+                                writer.add_scalar('test_image_loss', interval_loss, cur_itrs)
+                                interval_loss = 0.0
+                    writer.add_scalar('LR_Backbone_test',scheduler.get_lr()[0],cur_itrs)
+                    writer.add_scalar('LR_classifier_test',scheduler.get_lr()[1],cur_itrs)
 
-                            for k, (img, target, lbl) in enumerate(ret_samples):
-                                img = (denorm(img) * 255).astype(np.uint8)
-                                target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
-                                lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
-                                concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
-                                vis.vis_image('Sample %d' % k, concat_img)
-                        fixed_model.train()
-                    scheduler.step()
+
+            # Copy parameters from clone_model to fixed_model after meta-test
+            for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
+                param2.grad =param1.grad
+                
+            if (cur_itrs) % opts.val_interval == 0:
+                save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
+                        (opts.model, opts.dataset, opts.output_stride))
+                print("validation...")
+                # model.eval()
+                val_score, ret_samples = validate(
+                    opts=opts, model=fixed_model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
+                    ret_samples_ids=vis_sample_id)
+                print(metrics.to_str(val_score))
+                if val_score['Mean IoU'] > best_score:  # save best model
+                    best_score = val_score['Mean IoU']
+                    save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
+                            (opts.model, opts.dataset, opts.output_stride))
+                writer.add_scalar('mIoU_cs', val_score['Mean IoU'], cur_itrs)
+                writer.add_scalar('overall_acc_cs',val_score['Overall Acc'],cur_itrs)
+
+                if vis is not None:  # visualize validation score and samples
+                    vis.vis_scalar("[Val] Overall Acc", cur_itrs, val_score['Overall Acc'])
+                    vis.vis_scalar("[Val] Mean IoU", cur_itrs, val_score['Mean IoU'])
+                    vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
+
+                    for k, (img, target, lbl) in enumerate(ret_samples):
+                        img = (denorm(img) * 255).astype(np.uint8)
+                        target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
+                        lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
+                        concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
+                        vis.vis_image('Sample %d' % k, concat_img)
+                fixed_model.train()
+            scheduler.step()
 
             if cur_itrs >= opts.total_itrs:
                 return
