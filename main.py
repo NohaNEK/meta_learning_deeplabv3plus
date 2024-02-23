@@ -431,7 +431,8 @@ def main():
     factor=10
     lr_inner = 0.01
     lr_outer =1
-    
+    iter_meta_train=0
+    iter_meta_test=0
     while True:  # cur_itrs < opts.total_itrs:
         # =====  Train  =====
         model.train()
@@ -453,6 +454,7 @@ def main():
                         for (images, labels,_) in train_loaders[i]:
                             # print(cur_itrs)
                             cur_itrs += 1
+                            iter_meta_train+=1
 
 
                             images=images.to(device,dtype=torch.float32)
@@ -467,8 +469,9 @@ def main():
                             np_loss = loss.detach().cpu().numpy()
                             interval_loss += np_loss
 
-                            for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                                param1.grad =param2.grad
+                            #copy the gradients from the fixed model to the clone model
+                            for param_clone,param_fixed in zip(model.parameters(), fixed_model.parameters()):
+                                param_clone.grad =param_fixed.grad
  
                             
                             optimizer.step()
@@ -479,7 +482,7 @@ def main():
                                 interval_loss=interval_loss/10
                                 print("In meta-train : Epoch %d, Itrs %d/%d, Loss=%f" %
                                         (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
-                                writer.add_scalar('train_image_loss', interval_loss, cur_itrs)
+                                writer.add_scalar('train_image_loss', interval_loss, iter_meta_train)
                                 interval_loss = 0.0
                             if (cur_itrs)%100==0:    
                                add_gta_infos_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,val_loader)
@@ -516,14 +519,15 @@ def main():
 
 
                 
-                    # Copy parameters from clone_model to fixed_model after meta-train
-                    for  param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                        param2=param1
+                    # Copy parameters from clone_model to fixed_model after meta-train (update the fixed model) 
+                    for  param_clone,param_fixed in zip(model.parameters(), fixed_model.parameters()):
+                        param_fixed=param_clone
             #meta-test
             for i in id_val:
                 print('test domain id',i)
                 for (images,labels,_) in train_loaders[i]:
                     cur_itrs += 1
+                    iter_meta_test+=1
    
                     images=images.to(device,dtype=torch.float32)
                     labels = labels.to(device, dtype=torch.long)
@@ -532,8 +536,10 @@ def main():
                     outputs = fixed_model(images)
                     loss = criterion(outputs, labels)
                     loss.backward()
-                    for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                        param1.grad =param2.grad
+
+                    #copy the gradients from the fixed model to the clone model
+                    for param_clone,param_fixed in zip(model.parameters(), fixed_model.parameters()):
+                        param_clone.grad =param_fixed.grad
                 
                     optimizer.step()
                     np_loss = loss.detach().cpu().numpy()
@@ -543,7 +549,7 @@ def main():
                             interval_loss_test=interval_loss_test/10
                             print("In meta-test : Epoch %d, Itrs %d/%d, Loss=%f" %
                                 (cur_epochs, cur_itrs, opts.total_itrs, interval_loss_test))
-                            writer.add_scalar('test_image_loss', interval_loss_test, cur_itrs)
+                            writer.add_scalar('test_image_loss', interval_loss_test, iter_meta_test)
                             interval_loss_test = 0.0
                   
                     if (cur_itrs) % opts.val_interval == 0:
@@ -578,9 +584,9 @@ def main():
 
 
 
-            # Copy parameters from clone_model to fixed_model after meta-test
-            for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                param2 =param1
+            # Copy parameters from clone_model to fixed_model after meta-test (update the fixed model) 
+            for param_clone,param_fixed  in zip(model.parameters(), fixed_model.parameters()):
+                param_fixed =param_clone
                 
             if (cur_itrs) % opts.val_interval == 0:
                 save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
@@ -619,6 +625,8 @@ def main():
                 opts=opts, model=fixed_model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
                 ret_samples_ids=vis_sample_id)
             print(metrics.to_str(val_score))
+            if val_score['Mean IoU'] > best_score:  # save best model
+                                        best_score = val_score['Mean IoU']
           
             writer.add_scalar('mIoU_cs_per_episode', val_score['Mean IoU'], cur_itrs)
             writer.add_scalar('overall_acc_cs_per_episode',val_score['Overall Acc'],cur_itrs)
