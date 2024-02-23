@@ -475,16 +475,14 @@ def main():
                             np_loss = loss.detach().cpu().numpy()
                             interval_loss += np_loss
    
-                            if (cur_itrs) % 10 == 0:
-                                    interval_loss = interval_loss / 10
-                                    print("In meta-train : Epoch %d, Itrs %d/%d, Loss=%f" %
+                            if (cur_itrs) % 10 == 0: 
+                                interval_loss=interval_loss/10
+                                print("In meta-train : Epoch %d, Itrs %d/%d, Loss=%f" %
                                         (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
-                            if (cur_itrs) % 100 == 0: 
-                                interval_loss=interval_loss/100
                                 writer.add_scalar('train_image_loss', interval_loss, cur_itrs)
                                 interval_loss = 0.0
-                                
-                                add_gta_infos_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,val_loader)
+                            if (cur_itrs)%100==0:    
+                               add_gta_infos_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,val_loader)
 
 
                             if (cur_itrs) % opts.val_interval == 0:
@@ -542,15 +540,12 @@ def main():
                     interval_loss_test += np_loss
 
                     if (cur_itrs) % 10 == 0:
-                            interval_loss = interval_loss / 10
+                            interval_loss_test=interval_loss_test/10
                             print("In meta-test : Epoch %d, Itrs %d/%d, Loss=%f" %
-                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
-                    if (cur_itrs) % 100 == 0: 
-                                interval_loss=interval_loss/100
-                                writer.add_scalar('test_image_loss', interval_loss, cur_itrs)
-                                interval_loss = 0.0
-                            
-
+                                (cur_epochs, cur_itrs, opts.total_itrs, interval_loss_test))
+                            writer.add_scalar('test_image_loss', interval_loss_test, cur_itrs)
+                            interval_loss_test = 0.0
+                  
                     if (cur_itrs) % opts.val_interval == 0:
                                     save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
                                                 (opts.model, opts.dataset, opts.output_stride))
