@@ -323,7 +323,7 @@ def main():
     torch.manual_seed(opts.random_seed)
     np.random.seed(opts.random_seed)
     random.seed(opts.random_seed)
-    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/logs/R101_META_Learning_2")#original_baseline
+    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/logs2/R101_META_Learning")#original_baseline
 
     # Setup dataloader
     if opts.dataset == 'voc' and not opts.crop_val:
@@ -483,8 +483,7 @@ def main():
                                 interval_loss=interval_loss/100
                                 writer.add_scalar('train_image_loss', interval_loss, cur_itrs)
                                 interval_loss = 0.0
-                                writer.add_scalar('LR_Backbone_train',scheduler.get_lr()[0],cur_itrs)
-                                writer.add_scalar('LR_classifier_train',scheduler.get_lr()[1],cur_itrs)
+                                
                                 add_gta_infos_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,val_loader)
 
 
@@ -521,7 +520,7 @@ def main():
                 
                     # Copy parameters from clone_model to fixed_model after meta-train
                     for  param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                        param2.grad =param1.grad
+                        param2=param1
             #meta-test
             for i in id_val:
                 print('test domain id',i)
@@ -550,8 +549,7 @@ def main():
                                 interval_loss=interval_loss/100
                                 writer.add_scalar('test_image_loss', interval_loss, cur_itrs)
                                 interval_loss = 0.0
-                                writer.add_scalar('LR_Backbone_test',scheduler.get_lr()[0],cur_itrs)
-                                writer.add_scalar('LR_classifier_test',scheduler.get_lr()[1],cur_itrs)
+                            
 
                     if (cur_itrs) % opts.val_interval == 0:
                                     save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
@@ -587,7 +585,7 @@ def main():
 
             # Copy parameters from clone_model to fixed_model after meta-test
             for param1,param2 in zip(model.parameters(), fixed_model.parameters()):
-                param2.grad =param1.grad
+                param2 =param1
                 
             if (cur_itrs) % opts.val_interval == 0:
                 save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
@@ -617,6 +615,18 @@ def main():
                         concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
                         vis.vis_image('Sample %d' % k, concat_img)
                 fixed_model.train()
+            
+            writer.add_scalar('LR_Backbone',scheduler.get_lr()[0],cur_itrs)
+            writer.add_scalar('LR_classifier',scheduler.get_lr()[1],cur_itrs)
+            print("validation after each episode")
+            # model.eval()
+            val_score, ret_samples = validate(
+                opts=opts, model=fixed_model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
+                ret_samples_ids=vis_sample_id)
+            print(metrics.to_str(val_score))
+          
+            writer.add_scalar('mIoU_cs_per_episode', val_score['Mean IoU'], cur_itrs)
+            writer.add_scalar('overall_acc_cs_per_episode',val_score['Overall Acc'],cur_itrs)
             scheduler.step()
 
             if cur_itrs >= opts.total_itrs:
