@@ -167,19 +167,10 @@ def get_dataset(opts):
                         split='val', transform=val_transform)
         
     return train_dst, val_dst 
-def add_gta_infos_in_tensorboard(writer,imgs,labels,coco_imgs,rec_imgs,outputs,cur_itrs,denorm,train_loader):
+def add_gta_infos_in_tensorboard(writer,imgs,labels,outputs,cur_itrs,denorm,train_loader):
         img=imgs[0].detach().cpu().numpy()
         img=(denorm(img)*255).astype(np.uint8)
         writer.add_image('gta_image',img,cur_itrs,dataformats='CHW')
-
-        rec_img=rec_imgs[0].detach().cpu().numpy()
-        rec_img=(denorm(rec_img)*255).astype(np.uint8)
-        writer.add_image('gta_randomized_image',rec_img,cur_itrs,dataformats='CHW')
-
-        coco_img = coco_imgs[0].detach().cpu().numpy()
-        coco_img = (denorm(coco_img)*255).astype(np.uint8)
-        writer.add_image('coco_image',coco_img,cur_itrs,dataformats='CHW')
-        
         
         lbs=labels[0].detach().cpu().numpy()
         lbs=train_loader.dataset.decode_target(lbs).astype('uint8')
@@ -237,8 +228,8 @@ def validate(opts, model, loader, device, metrics,denorm=None,writer=None, cur_i
             targets = labels.cpu().numpy()
 
             metrics.update(targets, preds)
-            # if i <4 :
-            #     add_cs_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,loader,i)
+            if i <4 :
+                add_cs_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,loader,i)
             if ret_samples_ids is not None and i in ret_samples_ids:  # get vis samples
                 ret_samples.append(
                     (images[0].detach().cpu().numpy(), targets[0], preds[0]))
@@ -332,7 +323,7 @@ def main():
     torch.manual_seed(opts.random_seed)
     np.random.seed(opts.random_seed)
     random.seed(opts.random_seed)
-    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/logs/R101_META_Learning")#original_baseline
+    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/logs/R101_META_Learning_2")#original_baseline
 
     # Setup dataloader
     if opts.dataset == 'voc' and not opts.crop_val:
@@ -494,6 +485,37 @@ def main():
                                 interval_loss = 0.0
                                 writer.add_scalar('LR_Backbone_train',scheduler.get_lr()[0],cur_itrs)
                                 writer.add_scalar('LR_classifier_train',scheduler.get_lr()[1],cur_itrs)
+                                add_gta_infos_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,val_loader)
+
+
+                            if (cur_itrs) % opts.val_interval == 0:
+                                    save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
+                                                (opts.model, opts.dataset, opts.output_stride))
+                                    print("validation...")
+                                    # model.eval()
+                                    val_score, ret_samples = validate(
+                                        opts=opts, model=fixed_model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
+                                        ret_samples_ids=vis_sample_id)
+                                    print(metrics.to_str(val_score))
+                                    if val_score['Mean IoU'] > best_score:  # save best model
+                                        best_score = val_score['Mean IoU']
+                                        save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
+                                                    (opts.model, opts.dataset, opts.output_stride))
+                                    writer.add_scalar('mIoU_cs', val_score['Mean IoU'], cur_itrs)
+                                    writer.add_scalar('overall_acc_cs',val_score['Overall Acc'],cur_itrs)
+
+                                    if vis is not None:  # visualize validation score and samples
+                                        vis.vis_scalar("[Val] Overall Acc", cur_itrs, val_score['Overall Acc'])
+                                        vis.vis_scalar("[Val] Mean IoU", cur_itrs, val_score['Mean IoU'])
+                                        vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
+
+                                        for k, (img, target, lbl) in enumerate(ret_samples):
+                                            img = (denorm(img) * 255).astype(np.uint8)
+                                            target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
+                                            lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
+                                            concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
+                                            vis.vis_image('Sample %d' % k, concat_img)
+
 
 
                 
@@ -528,8 +550,39 @@ def main():
                                 interval_loss=interval_loss/100
                                 writer.add_scalar('test_image_loss', interval_loss, cur_itrs)
                                 interval_loss = 0.0
-                    writer.add_scalar('LR_Backbone_test',scheduler.get_lr()[0],cur_itrs)
-                    writer.add_scalar('LR_classifier_test',scheduler.get_lr()[1],cur_itrs)
+                                writer.add_scalar('LR_Backbone_test',scheduler.get_lr()[0],cur_itrs)
+                                writer.add_scalar('LR_classifier_test',scheduler.get_lr()[1],cur_itrs)
+
+                    if (cur_itrs) % opts.val_interval == 0:
+                                    save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
+                                                (opts.model, opts.dataset, opts.output_stride))
+                                    print("validation...")
+                                    # model.eval()
+                                    val_score, ret_samples = validate(
+                                        opts=opts, model=fixed_model, loader=val_loader, device=device, metrics=metrics,denorm=denorm,writer=writer,cur_itrs=cur_itrs,
+                                        ret_samples_ids=vis_sample_id)
+                                    print(metrics.to_str(val_score))
+                                    if val_score['Mean IoU'] > best_score:  # save best model
+                                        best_score = val_score['Mean IoU']
+                                        save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
+                                                    (opts.model, opts.dataset, opts.output_stride))
+                                    writer.add_scalar('mIoU_cs', val_score['Mean IoU'], cur_itrs)
+                                    writer.add_scalar('overall_acc_cs',val_score['Overall Acc'],cur_itrs)
+
+                                    if vis is not None:  # visualize validation score and samples
+                                        vis.vis_scalar("[Val] Overall Acc", cur_itrs, val_score['Overall Acc'])
+                                        vis.vis_scalar("[Val] Mean IoU", cur_itrs, val_score['Mean IoU'])
+                                        vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
+
+                                        for k, (img, target, lbl) in enumerate(ret_samples):
+                                            img = (denorm(img) * 255).astype(np.uint8)
+                                            target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
+                                            lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
+                                            concat_img = np.concatenate((img, target, lbl), axis=2)  # concat along width
+                                            vis.vis_image('Sample %d' % k, concat_img)
+
+
+
 
 
             # Copy parameters from clone_model to fixed_model after meta-test
