@@ -48,13 +48,14 @@ def get_argparser():
     parser.add_argument("--separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
     parser.add_argument("--output_stride", type=int, default=16, choices=[8, 16])
-    parser.add_argument("--nb_episodes",type=int,default=10,help="you should give number ")
+    parser.add_argument("--nb_episodes",type=int,default=100,help="you should give number ")
+    parser.add_argument("--nb_domains",type=int,default=1000,help="you should give number ")
 
     # Train Options
     parser.add_argument("--test_only", action='store_true', default=False)
     parser.add_argument("--save_val_results", action='store_true', default=False,
                         help="save segmentation results to \"./results\"")
-    parser.add_argument("--total_itrs", type=int, default=100e3,
+    parser.add_argument("--total_itrs", type=int, default=1000e3,
                         help="epoch number (default: 30k)")
     parser.add_argument("--lr", type=float, default=0.01,
                         help="learning rate (default: 0.01)")
@@ -323,7 +324,7 @@ def main():
     torch.manual_seed(opts.random_seed)
     np.random.seed(opts.random_seed)
     random.seed(opts.random_seed)
-    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/logs2/R101_META_Learning")#original_baseline
+    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/R101_META_Learning")#original_baseline
 
     # Setup dataloader
     if opts.dataset == 'voc' and not opts.crop_val:
@@ -333,8 +334,9 @@ def main():
 
 
 
-    #split ds into 10 domains
-    train_loaders =split_domains(train_dst=train_dst,factor=10,opts=opts)
+    #split ds into 1000 domains
+    train_loaders =split_domains(train_dst=train_dst,factor=opts.nb_domains,opts=opts)
+    print('images per domain',len(train_loaders[0])*opts.val_batch_size)
     val_loader = data.DataLoader(
         val_dst, batch_size=opts.val_batch_size, shuffle=True, num_workers=2)
     print("Dataset: %s, Train set: %d, Val set: %d" %
@@ -378,9 +380,11 @@ def main():
     def save_ckpt(path):
         """ save current model
         """
+     
+        # print("m .module",model.state_dict())
         torch.save({
             "cur_itrs": cur_itrs,
-            "model_state": model.module.state_dict(),
+            "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "best_score": best_score,
@@ -397,14 +401,19 @@ def main():
         checkpoint = torch.load(opts.ckpt, map_location=torch.device('cpu'))
         model.load_state_dict(checkpoint["model_state"])
         # model = nn.DataParallel(model)
-        device = torch.device('cpu')
+        # Copy parameters from clone_model to fixed_model after meta-train (update the fixed model) 
+        for  param_clone,param_fixed in zip(model.parameters(), fixed_model.parameters()):
+            param_fixed=param_clone
+       
         model.to(device)
+        fixed_model.to(device)
         if opts.continue_training:
             print(checkpoint)
             checkpoint['scheduler_state']['max_iters']= opts.total_itrs
             optimizer.load_state_dict(checkpoint["optimizer_state"])
             scheduler.load_state_dict(checkpoint["scheduler_state"])
             cur_itrs = checkpoint["cur_itrs"]
+            print("cur_itrs",cur_itrs)
             best_score = checkpoint['best_score']
             print("Training state restored from %s" % opts.ckpt)
         print("Model restored from %s" % opts.ckpt)
@@ -440,18 +449,23 @@ def main():
         cur_epochs += 1
 
         
-       
+        
         for i in range(opts.nb_episodes):
-            id_val=np.random.choice(a=np.arange(0, factor), size=2)
+            # create random list of id of 10 domain taken from 1000 domains
+            id_train=np.random.choice(a=np.arange(0, opts.nb_domains), size=10)
+            print("meta-train domains ids : ",id_train) #example : meta-train domains ids :  [265 125 996 527 320 369 123 156 985 733]
+            #pick rand 2 subdomains from id_train for meta-test 
+            id_val=random.sample(list(id_train), 2) # example : [733, 265]
+          
             print("meta-test domains ids : ",id_val)
 
-            for i in range(factor):
-                    print('train domain id',i)
+            for i,idx in enumerate(id_train):
+                    print('train domain id',idx)
                     if i in id_val :
                         continue
                     else: 
 
-                        for (images, labels,_) in train_loaders[i]:
+                        for (images, labels,_) in train_loaders[idx]:
                             # print(cur_itrs)
                             cur_itrs += 1
                             iter_meta_train+=1
@@ -488,7 +502,8 @@ def main():
                                add_gta_infos_in_tensorboard(writer,images,labels,outputs,cur_itrs,denorm,val_loader)
 
 
-                            if (cur_itrs) % opts.val_interval == 0:
+                            if (cur_itrs) % opts.val_interval == 0: # 
+                                    print('model',opts.model)
                                     save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
                                                 (opts.model, opts.dataset, opts.output_stride))
                                     print("validation...")
