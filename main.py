@@ -55,7 +55,7 @@ def get_argparser():
     parser.add_argument("--test_only", action='store_true', default=False)
     parser.add_argument("--save_val_results", action='store_true', default=False,
                         help="save segmentation results to \"./results\"")
-    parser.add_argument("--total_itrs", type=int, default=1000e3,
+    parser.add_argument("--total_itrs", type=int, default=240e3,
                         help="epoch number (default: 30k)")
     parser.add_argument("--lr", type=float, default=0.01,
                         help="learning rate (default: 0.01)")
@@ -324,7 +324,7 @@ def main():
     torch.manual_seed(opts.random_seed)
     np.random.seed(opts.random_seed)
     random.seed(opts.random_seed)
-    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/R101_META_Learning")#original_baseline
+    writer = SummaryWriter("/media/fahad/Crucial X8/deeplabv3plus/Deeplabv3plus_baseline/logs2/R101_META_Learning_1000domains")#original_baseline
 
     # Setup dataloader
     if opts.dataset == 'voc' and not opts.crop_val:
@@ -359,13 +359,17 @@ def main():
         {'params': model.backbone.parameters(), 'lr': 0.1 * opts.lr},
         {'params': model.classifier.parameters(), 'lr': opts.lr},
     ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
-    # optimizer_2 = torch.optim.SGD(params=[
-    #     {'params': model.classifier.parameters(), 'lr': opts.lr},
-    # ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
+
+
+    optimizer_2 = torch.optim.SGD(params=[
+        {'params': model.backbone.parameters(), 'lr': 0.01 * opts.lr},
+        {'params': model.classifier.parameters(), 'lr': 0.1*opts.lr},
+    ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
     # optimizer = torch.optim.SGD(params=model.parameters(), lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
     # torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.lr_decay_step, gamma=opts.lr_decay_factor)
     if opts.lr_policy == 'poly':
         scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
+        scheduler2 = utils.PolyLR(optimizer_2, opts.total_itrs, power=0.9)
         # print(scheduler)
     elif opts.lr_policy == 'step':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.step_size, gamma=0.1)
@@ -387,6 +391,8 @@ def main():
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
+            "scheduler2_state":scheduler2.state_dict(),
+            "optimizer2_state":optimizer_2.state_dict(),
             "best_score": best_score,
         }, path)
         print("Model saved as %s" % path)
@@ -412,6 +418,8 @@ def main():
             checkpoint['scheduler_state']['max_iters']= opts.total_itrs
             optimizer.load_state_dict(checkpoint["optimizer_state"])
             scheduler.load_state_dict(checkpoint["scheduler_state"])
+            optimizer_2.load_state_dict(checkpoint["optimizer2_state"])
+            scheduler2.load_state_dict(checkpoint["scheduler2_state"])
             cur_itrs = checkpoint["cur_itrs"]
             print("cur_itrs",cur_itrs)
             best_score = checkpoint['best_score']
@@ -534,9 +542,10 @@ def main():
 
 
                 
-                    # Copy parameters from clone_model to fixed_model after meta-train (update the fixed model) 
-                    for  param_clone,param_fixed in zip(model.parameters(), fixed_model.parameters()):
-                        param_fixed=param_clone
+            # Copy parameters from clone_model to fixed_model after meta-train (update the fixed model) 
+            for  param_clone,param_fixed in zip(model.parameters(), fixed_model.parameters()):
+                param_fixed=param_clone
+            
             #meta-test
             for i in id_val:
                 print('test domain id',i)
@@ -547,7 +556,7 @@ def main():
                     images=images.to(device,dtype=torch.float32)
                     labels = labels.to(device, dtype=torch.long)
                     
-                    optimizer.zero_grad()
+                    optimizer_2.zero_grad()
                     outputs = fixed_model(images)
                     loss = criterion(outputs, labels)
                     loss.backward()
@@ -556,7 +565,7 @@ def main():
                     for param_clone,param_fixed in zip(model.parameters(), fixed_model.parameters()):
                         param_clone.grad =param_fixed.grad
                 
-                    optimizer.step()
+                    optimizer_2.step()
                     np_loss = loss.detach().cpu().numpy()
                     interval_loss_test += np_loss
 
@@ -645,6 +654,7 @@ def main():
           
             writer.add_scalar('mIoU_cs_per_episode', val_score['Mean IoU'], cur_itrs)
             writer.add_scalar('overall_acc_cs_per_episode',val_score['Overall Acc'],cur_itrs)
+            scheduler2.step()
             scheduler.step()
 
             if cur_itrs >= opts.total_itrs:
